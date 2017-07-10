@@ -1,0 +1,98 @@
+---
+title: "Mais sobre séries de TV"
+author: "Luiz Fonseca"
+output: html_document
+layout: post
+published: true
+tags: [htmlwidgets, r]
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+O gráfico abaixo mostra a qualidade e quantidade de notas recebidas por séries populares. Os dados vem do maior site de avaliações de shows de televisão, o IMDB. O que você precisa saber é:
+<ul>
+<li> notas péssimas: 1, 2 e 3; </li>
+<li> notas ruins: 4 e 5; </li>
+<li> notas medianas: 6 e 7; </li>
+<li> notas boas: 8 e 9; </li>
+<li> nota máxima: 10. </li>
+</ul>
+Pelo gráfico você pode comparar qualidade de notas em uma série ou saber qual série teve mais notas máximas ou notas ruins. Os valores estão em valor absoluto.
+```{r, message=FALSE, warning=FALSE, echo=FALSE}
+library(tidyverse)
+library(highcharter)
+
+# Lendo os dados
+dados.series <- read_csv("../data/series_from_imdb.csv")
+
+# Séries com mais de oito temporadas
+series.mais.que.oito.temp <- dados.series %>%
+  filter(season > 8) %>%
+  select(series_name)
+
+series.mais.que.oito.temp <- unlist(unique(series.mais.que.oito.temp))
+
+# definindo operador not in
+'%!in%' <- function(x,y)!('%in%'(x,y))
+
+# Os mesmos dados de antes excluindo 4 séries que possuiam mais de 8 temporadas
+dados.series <- dados.series %>% 
+  filter(series_name %!in% series.mais.que.oito.temp)
+
+pop.series <- dados.series %>%
+  group_by(series_name) %>%
+  summarise(votes = sum(UserVotes))
+
+top.series <- top_n(pop.series, 5, votes)
+
+dados.final <- dados.series %>%
+  filter(series_name %in% top.series$series_name)
+
+dados.final <- dados.final %>%
+  mutate(notas.pessimas = round(r1 * UserVotes) + 
+           round(r2 * UserVotes) +
+           round(r3 * UserVotes),
+         notas.ruins = round(r4 * UserVotes) + round(r5 * UserVotes),
+         notas.medianas = round(r6 * UserVotes) + round(r7 * UserVotes),
+         notas.boas = round(r8 * UserVotes) + round(r9 * UserVotes),
+         nota.maxima =  round(r10 * UserVotes))
+
+chart.data <- dados.final %>%
+  group_by(series_name) %>%
+  summarise(pessimas = sum(notas.pessimas),
+            ruins = sum(notas.ruins),
+            medianas = sum(notas.medianas),
+            boas = sum(notas.boas),
+            maxima = sum(nota.maxima))
+
+hc2 <- highchart() %>% 
+  hc_title(text = "Quantidade de avaliações recebidas por séries famosas") %>% 
+  hc_subtitle(text = "Fonte: www.imdb.com") %>% 
+  hc_xAxis(categories = as.character(chart.data$series_name)) %>% 
+  hc_series(list(type = "column",
+                 name = "Péssimas",
+                 data = chart.data$pessimas),
+            list(type = "column",
+                 name = "Ruins",
+                 data = chart.data$ruins),
+            list(type = "column",
+                 name = "Medianas",
+                 data = chart.data$medianas),
+            list(type = "column",
+                 name = "Boas",
+                 data = chart.data$boas),
+            list(type = "column",
+                 name = "Máxima",
+                 data = chart.data$maxima)
+            )
+
+hc2
+```
+
+Percebe-se que Games of Thrones é a série com mais votos e parece ser a melhor avaliada já que recebeu bem mais notas boas e máximas do que ruins e péssimas. Dexter é a única das cinco séries em que o número de notas máximas é menor que o número de notas boas.
+<br>
+<br>
+
+

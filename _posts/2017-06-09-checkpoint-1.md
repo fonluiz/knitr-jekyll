@@ -1,0 +1,359 @@
+---
+title: "Analisando a filmografia de Jennifer Lawrence"
+author: "Luiz Fonseca"
+date: "20 de junho de 2017"
+layout: post
+published: true
+tags: [htmlwidgets, r]
+---
+
+
+
+
+{% highlight r %}
+# Bibliotecas utilizadas
+library(tidyverse, warn.conflicts = F)
+library(rvest)
+library(plotly)
+library(cluster)
+library(ggdendro)
+theme_set(theme_light())
+source("plota_solucoes_hclust.R")
+{% endhighlight %}
+
+## Objetivo
+
+Nesta análise exploraremos dados sobre a filmografia da atriz americana Jennifer Lawrence. Os dados vêm do site [Rotten Tomatoes](https://www.rottentomatoes.com). O propósito é agrupar os filmes da atriz em categorias plausíveis de acordo com duas variáveis: a avaliaçao do filme no Rotten Tomatoes e a quantidade de dinheiro que o filme arrecadou.
+
+
+{% highlight r %}
+# Coletando os filmes pela url do site
+from_page <- read_html("https://www.rottentomatoes.com/celebrity/jennifer_lawrence/") %>% 
+    html_node("#filmographyTbl") %>% # A sintaxe da expressão é de um seletor à lá JQuery: https://rdrr.io/cran/rvest/man/html_nodes.html 
+    html_table(fill=TRUE) %>% # Faz parse
+    as.tibble()
+
+# Limpando os dados para que não haja filmes com atributos faltando
+filmes = from_page %>% 
+    filter(RATING != "No Score Yet", 
+           `BOX OFFICE` != "—", 
+           CREDIT != "Executive Producer") %>%
+    mutate(RATING = as.numeric(gsub("%", "", RATING)), 
+           `BOX OFFICE` = as.numeric(gsub("[$|M]", "", `BOX OFFICE`))) %>% 
+    filter(`BOX OFFICE` >= 1) # Tem dois filmes que não parecem ter sido lançados no mundo todo
+
+names(filmes) <- c("avaliação", "filme", "papel", "bilheteria", "ano")
+{% endhighlight %}
+
+## Investigando as variáveis
+### Avaliação dos usuários
+Para cada filme da atriz sabemos o nome do filme, o papel que ela interpretou, o ano de lançamento, a bilheteria e a avaliação do site. Primeiramente, vamos ver se é possível definir grupos de filmes com base na avaliação dos usuários. Os gráficos abaixo podem nos dar alguma noção disso.
+
+{% highlight r %}
+filmes %>% 
+    ggplot(aes(x = "Filmes", y = avaliação)) + 
+    geom_jitter(width = .02, height = 0, size = 2, alpha = .6) +
+  labs(title = "Avaliação dos filmes de Jennifer Lawrence", x = "")
+{% endhighlight %}
+
+![plot of chunk unnamed-chunk-3](/portfolio-data-analysisfigure/source/problem-3/chckpoint-1/2017-06-09-checkpoint-1/unnamed-chunk-3-1.png)
+
+{% highlight r %}
+filmes %>% 
+    ggplot(aes(x = avaliação)) + 
+    geom_histogram(bins = 16) + 
+    geom_rug() +
+  labs(title = "Avaliação dos filmes de Jennifer Lawrence (Histograma)", y = "frequência")
+{% endhighlight %}
+
+![plot of chunk unnamed-chunk-3](/portfolio-data-analysisfigure/source/problem-3/chckpoint-1/2017-06-09-checkpoint-1/unnamed-chunk-3-2.png)
+
+A avaliação dos usuários do rotten tomatoes vai de 0 a 100. Só de olhar para os gráficos podemos identificar 4 grupos de filmes de acordo com as avaliações que receberam. É claro que esse agrupamento é subjetivo e pode variar de pessoa para pessoa, mais adiante iremos definir os grupos de forma mais objetiva. 
+
+Temos o grupo de filmes bem avaliados com notas maiores que 80, o grupo de filmes não tão bons com notas entre 48 e 75 mais ou menos; um grupo só com um filme de nota 30 (aproximadamente) e outro com um filme de nota 10.
+
+### Ano do filme
+Vemos que o agrupamento faz sentido para a variável avaliação. Por outro lado se observamos a variável ano, vemos que um agrupamento não faz muito sentido.
+
+{% highlight r %}
+filmes %>% 
+    ggplot(aes(x = "Filmes", y = ano)) + 
+    geom_jitter(width = .02, height = 0, size = 2, alpha = .6) +
+    labs(title = "Ano de lançamento dos filmes de Jennifer Lawrence", x = "")
+{% endhighlight %}
+
+![plot of chunk unnamed-chunk-4](/portfolio-data-analysisfigure/source/problem-3/chckpoint-1/2017-06-09-checkpoint-1/unnamed-chunk-4-1.png)
+
+{% highlight r %}
+filmes %>% 
+    ggplot(aes(x = ano)) + 
+    geom_histogram(bins = 17) + 
+    geom_rug() +
+  labs(title = "Ano de lançamento dos filmes de Jennifer Lawrence (histograma)", x = "")
+{% endhighlight %}
+
+![plot of chunk unnamed-chunk-4](/portfolio-data-analysisfigure/source/problem-3/chckpoint-1/2017-06-09-checkpoint-1/unnamed-chunk-4-2.png)
+
+A não ser que você quisesse que cada grupo fosse um ano. Porém, qual a utilidade desse agrupamento?
+
+### Bilheteria
+
+A variável bilheteria tem uma caraterística interessante: ela pode apresentar valores muito altos, 400 milhões de dólares, por exemplo. Porque isso é importante?
+
+Exemplo I) A diferença de um filme que lucrou 1 milhão de dólares para um filme que lucrou 15 milhões de dólares parece bastante notável. Um lucrou 15 vezes mais do que o outro. 
+
+Exemplo II) Será que a diferença entre um filme que lucrou 450 milhões para um filme que lucrou 465 milhões deve receber a mesma atenção? Afinal, o segundo só lucrou 3% a mais do que o primeiro. 
+
+Isso é importante para a nossa análise, pois apesar de a diferença de lucro dos exemplos serem iguais (15 milhões), essa diferença, para o primeiro caso, parece ser bem mais evidente. Os filmes do segundo exemplo poderiam ser incluídos em um mesmo grupo levando em consideração somente a bilheteria, enquanto que os filmes do primeiro exemplo poderiam estar em categorias separadas: um deles recebeu bem menos do que o outro levando em consideração a soma das duas bilheterias.
+
+Sabendo disso, vamos analisar a variável bilheteria de duas formas: 
+I) Utilizando uma escala linear assim como foi feito anteriorente;
+II) Utilizando uma escala logarítmica para evidenciar diferenças pequenas apenas para valores pequenos.
+
+{% highlight r %}
+filmes %>% 
+    ggplot(aes(x = "Filmes", y = bilheteria)) + 
+    geom_jitter(width = .02, height = 0, size = 2, alpha = .6) +
+  labs(title = "Bilheteria dos filmes de Jennifer Lawrence (escala linear)", x = "", y = "bilheteria (milhões de dólares)")
+{% endhighlight %}
+
+![plot of chunk unnamed-chunk-5](/portfolio-data-analysisfigure/source/problem-3/chckpoint-1/2017-06-09-checkpoint-1/unnamed-chunk-5-1.png)
+
+{% highlight r %}
+filmes %>% 
+    ggplot(aes(x = "Filmes", y = bilheteria)) + 
+    geom_jitter(width = .02, height = 0, size = 2, alpha = .6) + 
+    scale_y_log10() + 
+    labs(title = "Bilheteria dos filmes de Jennifer Lawrence (escala logarítmica)", x = "", y = "bilheteria (milhões de dólares)")
+{% endhighlight %}
+
+![plot of chunk unnamed-chunk-5](/portfolio-data-analysisfigure/source/problem-3/chckpoint-1/2017-06-09-checkpoint-1/unnamed-chunk-5-2.png)
+
+Os grupos ficam bem mais claros ao utilizar a escala logarítmica. Podemos identificar três grupos: um de grandes sucesssos de bilheteria, com renda em geral acima de 100 milhões de dólares; outro grupo com filmes que não fizeram tanto sucesso; e um terceiro grupo com filmes de renda bem baixa quando comparados com os outros, abaixo de 10 milhões de dólares.
+
+## Agrupamento 
+A partir deste ponto iremos utilizar algoritmos para gerar grupos dos filmes. Iremos utilizar várias abordagens e escolhermos a que parecer mais correta.
+
+### Com uma variável
+#### Variável: Avaliação
+Há duas maneiras principais de agrupar: aglomerativa ou baseada em partição. Vamos explorar primeiro a hierárquica aglomerativa.
+
+Por hora utilizaremos apenas a variável avaliação, para a qual o nosso olhômetro definiu quatro grupos. O algoritmo de agrupamento irá medir as distâncias entre todos os pontos e juntar os dois pontos mais próximos em um grupo. A partir daí esses dois pontos serão tratados como um único e o centro da distância entre esses dois pontos será o ponto levado em consideração para esse grupo formado. A cada iteração (rodada), o algoritmo irá unir os dois pontos mais próximos, formando grupos. No final teremos todos os melhores grupos para cada número de grupos (1, 2, 3, ...) e cabe a nós escolhermos qual o melhor número.
+
+O gráfico abaixo se chama dendrograma e mostra os grupos formados a cada iteração do algoritmo. No eixo y temos os filmes a agrupar e no eixo x temos o tamanho da distância para agrupar dois pontos/grupos, ou seja, quanto maior a linha horizontal que une dois filmes/grupos, maior é a distância ou diferença entre esses filmes/grupos. 
+
+
+{% highlight r %}
+row.names(filmes) = NULL
+agrupamento_h = filmes %>% 
+    column_to_rownames("filme") %>% # hclust precisa dos rótulos em nomes de linha (ruim)
+    select(avaliação) %>%
+    dist(method = "euclidian") %>% 
+    hclust(method = "ward.D2")
+
+ggdendrogram(agrupamento_h, rotate = T, size = 2) + 
+    geom_hline(yintercept = 20, colour = "red") +
+    labs(title = "Agrupamento dos filmes")
+{% endhighlight %}
+
+![plot of chunk unnamed-chunk-6](/portfolio-data-analysisfigure/source/problem-3/chckpoint-1/2017-06-09-checkpoint-1/unnamed-chunk-6-1.png)
+
+Fica a nosso critério escolher qual o número de grupos que melhor define os filmes. Provavelmente a melhor escolha de grupos é a que está cortada pela linha vermelha, pois a distância para unir dois grupos a partir desse ponto é bem maior do que as distâncias anteriores. Entao, para a avaliação teríamos quatro grupos de filmes, assim como háviamos interpretado antes.
+
+O gráfico abaixo nos traz uma visão mais clara das distâncias entre os grupos a cada iteração do algoritmo.
+
+
+{% highlight r %}
+data.frame(k = 1:NROW(agrupamento_h$height),
+           height = agrupamento_h$height) %>% 
+    ggplot(aes(x = k, y = height)) + 
+    geom_line(colour = "grey") + 
+    geom_point() + 
+    labs(x = "Junções feitas (14 no total)", y = "Dissimilaridade na junção")
+{% endhighlight %}
+
+![plot of chunk unnamed-chunk-7](/portfolio-data-analysisfigure/source/problem-3/chckpoint-1/2017-06-09-checkpoint-1/unnamed-chunk-7-1.png)
+
+Vemos que da 11ª junção para a 12º a distância entre os grupos já é bem maior do que qualquer outra anterior. Então, ficamos convencidos que de acordo com esse algoritmo de aglomeração hierárquica há quatro grupos distintos de filmes quanto à avaliação.
+
+Abaixo temos outra visualização. Nesta, podemos ver quais os grupos formados pelos algoritmo para vários números de grupo.
+
+
+{% highlight r %}
+solucoes = tibble(k = 1:9)
+
+atribuicoes = solucoes %>% 
+    group_by(k) %>% 
+    do(cbind(filmes, 
+             grupo = as.character(cutree(agrupamento_h, .$k)))) 
+
+atribuicoes %>% 
+    ggplot(aes(x = "Filmes", y = avaliação, colour = grupo)) + 
+    geom_jitter(width = .02, height = 0, size = 2, alpha = .6) + 
+    facet_wrap(~ paste(k, " grupos")) +
+    labs(title = "Agrupamento para diferentes números de grupos", x = "")
+{% endhighlight %}
+
+![plot of chunk unnamed-chunk-8](/portfolio-data-analysisfigure/source/problem-3/chckpoint-1/2017-06-09-checkpoint-1/unnamed-chunk-8-1.png)
+
+Dividir os filmes em quatro grupos também parece ser uma das escolhas mais sensatas de acordo com o gráfico acima.
+
+<i> Observação: O método utilizado para o agrupamento neste exemplo é o "Ward". Há mais informações sobre esse método na sua [documentação](https://stat.ethz.ch/R-manual/R-devel/library/stats/html/hclust.html) </i>
+
+#### Variável: Bilheteria
+
+Vamos agora utilizar a variável bilheteria para agrupar os filmes. Só que iremos fazer um agrupamento utilizando a escala linear e outro utilizando a escala logarítmica e iremos comparar as duas abordagens.
+
+##### Escala linear
+
+
+{% highlight r %}
+row.names(filmes) = NULL
+agrupamento_h = filmes %>% 
+    column_to_rownames("filme") %>% # hclust precisa dos rótulos em nomes de linha (ruim)
+    select(bilheteria) %>%
+    dist(method = "euclidian") %>% 
+    hclust(method = "ward.D2")
+
+ggdendrogram(agrupamento_h, rotate = T, size = 2) + 
+    geom_hline(yintercept = 200, colour = "red")
+{% endhighlight %}
+
+![plot of chunk unnamed-chunk-9](/portfolio-data-analysisfigure/source/problem-3/chckpoint-1/2017-06-09-checkpoint-1/unnamed-chunk-9-1.png)
+
+{% highlight r %}
+solucoes = tibble(k = 1:9)
+
+atribuicoes = solucoes %>% 
+    group_by(k) %>% 
+    do(cbind(filmes, 
+             grupo = as.character(cutree(agrupamento_h, .$k)))) 
+
+atribuicoes %>% 
+    ggplot(aes(x = "Filmes", y = bilheteria, colour = grupo)) + 
+    geom_jitter(width = .02, height = 0, size = 2, alpha = .6) + 
+    facet_wrap(~ paste(k, " grupos")) +
+    labs(y = "bilheteria (milhões de dólares)")
+{% endhighlight %}
+
+![plot of chunk unnamed-chunk-9](/portfolio-data-analysisfigure/source/problem-3/chckpoint-1/2017-06-09-checkpoint-1/unnamed-chunk-9-2.png)
+
+Parece que para a escala linear o melhor agrupamento para a variável bilheteria seria dividirmos os filmes em três grupos. Um grupo de filmes que renderam abaixo de 50 milhões de dólares; outro grupo com filmes que renderam entre 100 e 200 milhões de dólares; e outro grupo com filmes que renderam acima de 250 milhões.
+
+
+##### Escala logarítmica
+
+
+{% highlight r %}
+row.names(filmes) = NULL
+agrupamento_h = filmes %>% 
+    column_to_rownames("filme") %>% # hclust precisa dos rótulos em nomes de linha (ruim)
+    mutate(log_bilheteria = log(bilheteria, 10)) %>%
+    select(log_bilheteria) %>%
+    dist(method = "euclidian") %>% 
+    hclust(method = "ward.D2")
+
+ggdendrogram(agrupamento_h, rotate = T, size = 2) +
+    geom_hline(yintercept = 0.6, colour = "red")
+{% endhighlight %}
+
+![plot of chunk unnamed-chunk-10](/portfolio-data-analysisfigure/source/problem-3/chckpoint-1/2017-06-09-checkpoint-1/unnamed-chunk-10-1.png)
+
+{% highlight r %}
+solucoes = tibble(k = 1:9)
+
+atribuicoes = solucoes %>% 
+    group_by(k) %>% 
+    do(cbind(filmes, 
+             grupo = as.character(cutree(agrupamento_h, .$k)))) 
+
+atribuicoes %>% 
+    ggplot(aes(x = "Filmes", y = bilheteria, colour = grupo)) + 
+    geom_jitter(width = .07, height = 0, size = 2, alpha = .6) + 
+    facet_wrap(~ paste(k, " grupos")) +
+   scale_y_log10() +
+   labs(y = "bilheteria (milhões de dólares)")
+{% endhighlight %}
+
+![plot of chunk unnamed-chunk-10](/portfolio-data-analysisfigure/source/problem-3/chckpoint-1/2017-06-09-checkpoint-1/unnamed-chunk-10-2.png)
+
+Utilizando a escala logarítmica, parece que a melhor opção de agrupamento seria dividir os filmes em quatro grupos. Então, teríamos um grupo de filmes menos rentáveis, com lucro inferior a 10 milhões de dólares; outro grupo de filmes que renderam um pouco mais, algo em torno de 30 e 40 milhões de dólares; outro grupo de filmes que renderam em torno de 100 e 150 milhões de dólares; e um último grupo de grandes sucessos de bilheteria, com renda superior a 250 milhẽs de dólares.
+
+Comparando as escalas, vemos que na escala logarítmica os grupos são mais bem definidos. Por exemplo, na escala linear o filme Joy, que rendeu 42,6 milhões de dólares ficou no mesmo grupo de filmes como "Like Crazy" (3,4 milhões) e "Winter's bone" (6,2 milhões). Na escala logarítimica, uma diferença pequena entre valores pequenos é mais relevante do que uma diferença pequena para valores grandes.
+
+## Le Grand Finale
+
+Agora que já sabemos um pouco sobre agrupamento e sabemos como os filmes são agrupados para diferentes variáveis e diferentes escalas iremos realizar um agrupamento final com as nossas duas variáveis juntas, utilizando a escala logarítmica para a variável bilheteria.
+
+Os gráficos abaixo nos auxiliarão na escolha da quantidade de grupos.
+
+
+{% highlight r %}
+filmes <- filmes %>% mutate(log_bilheteria = log(bilheteria, 10))
+
+agrupamento_h_2d = filmes %>% 
+    column_to_rownames("filme") %>%
+    select(avaliação, log_bilheteria) %>% 
+    mutate_all(funs(scale)) %>%
+    dist(method = "euclidean") %>% 
+    hclust(method = "ward.D2")
+
+ggdendrogram(agrupamento_h_2d, rotate = TRUE) +
+  geom_hline(yintercept = 3, colour = "red")
+{% endhighlight %}
+
+![plot of chunk unnamed-chunk-11](/portfolio-data-analysisfigure/source/problem-3/chckpoint-1/2017-06-09-checkpoint-1/unnamed-chunk-11-1.png)
+
+{% highlight r %}
+data.frame(k = 1:NROW(agrupamento_h_2d$height),
+           height = agrupamento_h_2d$height) %>% 
+    ggplot(aes(x = k, y = height)) + 
+    geom_line(colour = "grey") + 
+    geom_point() + 
+    labs(x = "Junções feitas (14 no total)", y = "Dissimilaridade na junção")
+{% endhighlight %}
+
+![plot of chunk unnamed-chunk-11](/portfolio-data-analysisfigure/source/problem-3/chckpoint-1/2017-06-09-checkpoint-1/unnamed-chunk-11-2.png)
+
+Examinando os gráficos podemos ver que da 12ª para a 13ª iteração do algoritmo temos uma dissimilaridade entre grupos muito grande e este é o ponto do agrupamento em que devemos parar. Então o número de grupos do agrupamento será 3. Vamos ver como se comportam esses grupos.
+
+
+{% highlight r %}
+plota_hclusts_2d(agrupamento_h_2d, 
+                 filmes, 
+                 c("avaliação", "bilheteria"), 
+                 linkage_method = "centroid", ks = 3) +
+   labs(y = "bilheteria (milhões de dólares)", x = "Avaliação dos usuários")
+{% endhighlight %}
+
+![plot of chunk unnamed-chunk-12](/portfolio-data-analysisfigure/source/problem-3/chckpoint-1/2017-06-09-checkpoint-1/unnamed-chunk-12-1.png)
+
+Então, levando em consideração tanto a bilheteria quanto a avaliação dos usuários, temos três grupos de filmes:
+
+<ol>
+<li> <b> Os prediletos</b> (grupo azul), que são os filmes que renderam uma boa bilheteria (acima de 100 milhões) e em geral são bem avaliados pelos usuários do Rotten Tomatoes, com notas acima de 60 e, em sua maioria, acima de 80. Um exemplo de filme que está nesse grupo é Jogos Vorazes (The Hunger Games), que é o filme de maior bilheteria da atriz e é um filme muito bem avaliado (84/100). </li>
+
+<li> <b> Os desconhecidos</b> (grupo verde), que é o grupo dos filmes que são bem avaliados porém pouca gente foi assistí-los no cinema e por isso renderam as menores bilheterias. Um exemplo de filme nesse grupo é Inverno da Alma (Winter's bone) que é muito bem avaliado (94/100), porém rendeu pouca bilheteria, talvez precisasse de mais marketing. </li>
+
+<li> <b> Os nao-chegaram-lá </b>, que é o grupo de filmes que são mal avalidos, com notas abaixo de 6, e renderam uma bilheteria baixa/média (no máximo 140 milhões de dólares). Um exemplo de filme nesse grupo é X-men: Apocalypse, que rendeu 136 milhões de dólares, porém sua avaliação no Rotten Tomatoes é 48/100.</li>
+</ol>
+
+<i> Observação: Quando utilizamos mais de uma variável em agrupamentos, precisamos deixar essas variáveis numa mesma escala para que uma não acabe influenciando mais no agrupamento do que outras. No nosso caso, a bilheteria acabaria influenciando bem mais no agrupamento, já que seus valores são bem mais altos que os da avaliação. Porém, como deixamos ambas as variáveis na mesma escala, isso não ocorreu.</i>
+
+Uma forma de avaliarmos o nosso agrupamento é verificando-o através de um gráfico de silhueta. O gráfico de silhueta abaixo nos diz o quão bem agrupados está cada um dos filmes. Quanto mais próximo de 1 a barra estiver, mais bem agrupado está o filme. Se o valor apontado pela barra for negativo, significa que aquele filme seria melhor encaixado em outro grupo do que n ogrupo atual.
+
+
+{% highlight r %}
+distancias = filmes %>% 
+    column_to_rownames("filme") %>%
+    select(avaliação, log_bilheteria) %>% 
+    mutate_all(funs(scale)) %>% 
+    dist(method = "euclidean")
+
+plot(silhouette(cutree(agrupamento_h_2d, k = 3), distancias))
+{% endhighlight %}
+
+![plot of chunk unnamed-chunk-13](/portfolio-data-analysisfigure/source/problem-3/chckpoint-1/2017-06-09-checkpoint-1/unnamed-chunk-13-1.png)
+
+Observando o gŕafico vemos que todos os filmes estão bem encaixados nos seus grupos, alguns mais e outros menos.
+

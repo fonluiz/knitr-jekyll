@@ -1,0 +1,112 @@
+---
+title: "Analisando séries de televisão"
+author: "Luiz Alberto Fonseca"
+date: "18 de maio de 2017"
+layout: post
+published: true
+tags: [htmlwidgets, r]
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+```
+
+### Uma visão geral dos dados
+
+Para esta análise iremos utilizar dados do [IMDB](http://www.imdb.com/) sobre algumas séries de televisão. Dentre as informações sobre as séries, temos o nome da série, o nome de cada episódio, a temporada correspondente a cada episódio, a nota para cada episódio, o número de votos e algumas outras que serão comentadas mais adiante. Abaixo procurarei responder da melhor forma algumas perguntas sobre as séries. Mas antes de responder as perguntas, irei selecionar algumas séries para tomarmos como objeto da nossa análise.
+
+```{r}
+library(tidyverse)
+
+dados.series <- read_csv("series_from_imdb.csv")
+
+# Todas as séries do arquivo
+unique(dados.series$series_name)
+
+# Séries que iremos analisar
+series.selecionadas <- dados.series %>% 
+  filter(series_name %in% c("13 Reasons Why", "How to Get Away with Murder", "Black Mirror",
+                            "Once Upon a Time", "Friends"))
+```
+
+As cinco séries selecionadas foram 13 Reasons Why, How to Get Away with Murder, Black Mirror, Once Upon a Time e Friends.
+
+### Pergunta 1: Qual das séries escolhidas é mais bem avaliada no IMDB? A diferença é grande? Pequena? 
+
+Para responder essa questão precisamos saber como comparar as series para podermos decidir qual a melhor. Nos dados fornecidos temos a média de avaliações de cada episódio e podemos utilizar essa variável para comparar as séries. Primeiramente vamos ver de uma forma geral cada avaliação.
+
+```{r}
+library(ggplot2)
+
+series.selecionadas <- series.selecionadas %>%
+  mutate(series_name = ifelse(series_name == "How to Get Away with Murder",
+                              "HTGAWM",
+                              series_name))
+
+theme_update(plot.title = element_text(hjust = 0.5))
+  
+ggplot(series.selecionadas, aes(x = series_name, y = UserRating)) +
+  geom_jitter(width = 0.25, alpha = 0.5, aes(color = series_name), show.legend = F) +
+  labs(title = "Avalição de series no IMDB", x= "Nome da Série", y= "Nota do episódio")
+```
+
+No gráfico acima cada ponto representa a nota de um episódio da série. Primeiro podemos perceber a diferença entre o número de episódios das séries. Friends tem muito mais episódio do que 13 Reasons Why e Black Mirror, por exemplo. Mas o nosso objetivo é identificar qual delas é a mais bem avaliada. Observando o gráfico vemos que duas das séries possuem todos os episódios avaliados com nota acima de 8 (13 Reasons Why e How to Get Away with Murder). Essas podem ser boas candidatas à série melhor avaliada. Porém, podemos ver que Friends possui os episódios com notas mais altas apesar de nem todos serem avaliados acima de nota 8. Precisamos de métricas e visualizações mais eficientes.
+
+Podemos utilizar o conceito de mediana para decidir essa questão. A mediana é uma medida estatística que marca o valor dos dados que está exatamente no meio caso ordenemos todos os valores. Em outras palavras, metade dos valores observados está abaixo do valor da mediana e a outra metade está acima. Vamos ver isso no gráfico.
+
+```{r}
+ggplot(series.selecionadas, aes(x = series_name, y = UserRating)) +
+  geom_jitter(width = 0.25, alpha = 0.5, aes(color = series_name), show.legend = F)  +
+    stat_summary(aes(x = series_name, y = UserRating), fun.y = median, fun.ymin = median, fun.ymax = median, geom = "crossbar", width = 0.5, inherit.aes = FALSE) +
+  stat_summary(aes(label=round(..y..,2)), fun.y=median, geom="text", size=5,
+             vjust = -0.5) +
+  labs(x= "Nome da Série", y= "Nota do episódio")
+   
+```
+
+A barra preta marca a mediana de avaliações para cada série. Com a nova visualização podemos ver que a mediana mais alta (8,7) é a de How to Get Away with Murder. Isso quer dizer que metade dos episódios dessa série receberam notas acima de 8,7. 
+
+A diferença não é grande entre as medianas de cada série. Temos três séries com medianas iguais a 8,5. 
+
+### Pergunta 2: Qual das séries escolhidas tem episódios de qualidade mais irregular segundo o IMDB? A diferença é grande? Pequena?
+
+Observando os gráficos anteriores podemos ver que de uma forma geral os episódios das séries não são muito irregulares. Há alguns poucos episodios com notas um pouco inferiores, mas eles não representam uma porcentagem significativa do total de episódios das séries. 
+
+Há uma maneira melhor de visualizarmos essa irregularidade. Com conceitos parecidos com o da mediana poderemos entender o gráfico abaixo.
+
+```{r}
+ggplot(series.selecionadas, aes(x = series_name, y = UserRating)) +
+  geom_boxplot(aes(color = series_name), show.legend = FALSE) +
+  labs(x= "Nome da Série", y= "Nota do episódio")
+```
+
+O gráfico acima se chama boxplot. A linha no meio da caixa é a mesma do gráfico anterior: a mediana. No limite superior da caixa temos a medida conhecida como "terceiro quartil" e no limite inferior temos o "primeiro quartil". Análogos a mediana, esses quartis marcam repectivamente 3/4 e 1/4 das observações, isto é, abaixo do valor do primeiro quartil estão 25% dos valores das observações e abaixo do valor do terceiro quartil estão 75% dos valores das observações. Isso significa que entre esses dois limites temos 50% dos valores das observações. Se todos os valores das observações fossem exatamente o mesmo, o primeiro e terceiro quartis e a mediana seriam todos iguais. 
+
+O <b>intervalo interquartil</b> (IQR - <i>Interquartile Range</i>) é a diferença entre o valor do terceiro quartil e do primeiro quartil. Quanto maior esse valor, maior é o intervalo de valores das observações, ou seja, mais irregular são esses valores. O IQR será a medida que utilizaremos para medir a irregularidade.
+
+A série com o menor IQR é Friends. Então iremos considerá-la a série com episódios mais regulares. Os pontos que aparecem no boxplot são os valores que são bastante iregulares quando comparados com o todo. Por exemplo, em Friends temos 3 episódios que receberam notas mais baixas do que o "normal" e 4 episódios que receberam notas muito altas, fugindo do padrão. 
+
+A diferença entre os IQRs das séries não é muito alta. De forma geral os quartis do boxplot estão entre 8,2 e 9.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
